@@ -1,0 +1,23 @@
+services:
+  backend:
+    build:
+      context: ./backend
+    container_name: milk-tea-backend
+    environment:
+      DATABASE_URL: sqlite:////app/data/milk_tea_purchase.db
+    volumes:
+      - backend-data:/app/data
+    ports:
+      - "18050:5000"
+
+  frontend:
+    build:
+      context: ./frontend
+    container_name: milk-tea-frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  backend-data:
