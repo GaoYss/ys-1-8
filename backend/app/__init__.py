@@ -3,6 +3,7 @@ from flask_cors import CORS
 
 from .config import Config
 from .extensions import db, migrate
+from .migrations import run_db_migrations
 from .routes.inventory import fix_missing_batches_for_existing_ingredients, inventory_bp
 from .routes.orders import orders_bp
 from .routes.records import records_bp
@@ -30,6 +31,7 @@ def create_app(config_class=Config):
 
     with app.app_context():
         db.create_all()
+        run_db_migrations()
         seed_data()
         fix_missing_batches_for_existing_ingredients()
 

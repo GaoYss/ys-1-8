@@ -86,7 +86,8 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onActivated, onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 
 import { inventoryApi } from '../api/inventory'
 import { ordersApi } from '../api/orders'
@@ -101,6 +102,10 @@ import {
   formatDate,
   statusText
 } from '../utils/format'
+
+const DASHBOARD_STALE_KEY = 'inventory_dashboard_stale'
+
+const route = useRoute()
 
 const summary = ref({
   ingredientCount: 0,
@@ -146,7 +151,23 @@ const expiredBatchColumns = [
   { key: 'status', label: '状态' }
 ]
 
-onMounted(async () => {
+function isStale() {
+  try {
+    return !!localStorage.getItem(DASHBOARD_STALE_KEY)
+  } catch (_) {
+    return false
+  }
+}
+
+function clearStale() {
+  try {
+    localStorage.removeItem(DASHBOARD_STALE_KEY)
+  } catch (_) {}
+}
+
+async function loadDashboardData() {
+  const stale = isStale()
+  if (stale) clearStale()
   const [summaryRes, inventoryRes, ordersRes, suppliersRes, batchesRes] = await Promise.all([
     inventoryApi.summary(),
     inventoryApi.list(),
@@ -159,7 +180,27 @@ onMounted(async () => {
   orders.value = ordersRes.data
   suppliers.value = suppliersRes.data
   allBatches.value = batchesRes.data
+  if (stale) {
+    console.log('[Dashboard] Reloaded after inventory operations (stale flag detected)')
+  }
+}
+
+onMounted(async () => {
+  await loadDashboardData()
 })
+
+onActivated(async () => {
+  await loadDashboardData()
+})
+
+watch(
+  () => [route.path, route.fullPath],
+  async ([path]) => {
+    if (path === '/dashboard' || (path && path.indexOf('dashboard') >= 0)) {
+      await loadDashboardData()
+    }
+  }
+)
 </script>
 
 <style scoped>

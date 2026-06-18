@@ -213,6 +213,9 @@ async function submitRecord() {
     const unit = (result.records && result.records[0] && result.records[0].unit) || ''
     const actionText = payload.recordType === 'in' ? '入库' : '出库'
     const batchHint = createdCount > 1 ? `（拆分${createdCount}个批次）` : ''
+    try {
+      localStorage.setItem('inventory_dashboard_stale', String(Date.now()))
+    } catch (_) {}
     showSuccess(`${actionText}成功：${totalQty}${unit} ${batchHint}`)
     Object.assign(form, {
       ingredientId: null,

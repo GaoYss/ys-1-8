@@ -296,6 +296,9 @@ async function submitIngredient() {
         expiryDate: form.expiryDate || undefined
       }
       await inventoryApi.create(payload)
+      try {
+        localStorage.setItem('inventory_dashboard_stale', String(Date.now()))
+      } catch (_) {}
       showFormMessage('原料创建成功！初始库存已自动生成初始批次。')
       resetForm()
     }
