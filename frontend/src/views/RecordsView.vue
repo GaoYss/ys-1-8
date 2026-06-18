@@ -8,7 +8,7 @@
       <div class="form-grid">
         <label>
           原料
-          <select v-model.number="form.ingredientId">
+          <select v-model.number="form.ingredientId" @change="onIngredientChange">
             <option disabled :value="null">选择原料</option>
             <option v-for="item in ingredients" :key="item.id" :value="item.id">
               {{ item.name }} / 库存 {{ item.stock }} {{ item.unit }}
@@ -26,6 +26,16 @@
           数量
           <input v-model.number="form.quantity" type="number" min="1" />
         </label>
+        <template v-if="form.recordType === 'in'">
+          <label>
+            批次号
+            <input v-model="form.batchNo" placeholder="如：ASM-20260618-01" />
+          </label>
+          <label>
+            保质期
+            <input v-model="form.expiryDate" type="date" />
+          </label>
+        </template>
         <label>
           经办人
           <input v-model="form.operator" />
@@ -34,11 +44,27 @@
           来源/用途
           <input v-model="form.source" />
         </label>
-        <label>
+        <label class="span-2">
           备注
           <input v-model="form.note" />
         </label>
       </div>
+    </section>
+
+    <section v-if="form.recordType === 'out' && form.ingredientId && batches.length" class="panel">
+      <h2>可用批次（按临期优先自动扣减）</h2>
+      <p class="hint">系统将按照保质期从近到远（FEFO）自动扣减，已过期批次无法出库。</p>
+      <DataTable :columns="batchColumns" :rows="batches">
+        <template #remaining="{ row }">{{ row.remaining }} {{ row.unit }}</template>
+        <template #expiryDate="{ row }">{{ formatDate(row.expiryDate) }}</template>
+        <template #daysToExpiry="{ row }">{{ daysToExpiryText(row.daysToExpiry) }}</template>
+        <template #status="{ row }">
+          <StatusBadge
+            :label="batchStatusText(row.status)"
+            :variant="batchStatusVariant(row.status)"
+          />
+        </template>
+      </DataTable>
     </section>
 
     <p v-if="error" class="error-text">{{ error }}</p>
@@ -51,28 +77,45 @@
         />
       </template>
       <template #quantity="{ row }">{{ row.quantity }} {{ row.unit }}</template>
+      <template #batchNo="{ row }">
+        <span v-if="row.batchNo">{{ row.batchNo }}</span>
+        <span v-else class="muted">-</span>
+      </template>
+      <template #expiryDate="{ row }">
+        <span v-if="row.expiryDate">{{ formatDate(row.expiryDate) }}</span>
+        <span v-else class="muted">-</span>
+      </template>
       <template #createdAt="{ row }">{{ formatDateTime(row.createdAt) }}</template>
     </DataTable>
   </section>
 </template>
 
 <script setup>
-import { onMounted, reactive, ref } from 'vue'
+import { onMounted, reactive, ref, watch } from 'vue'
 
 import { inventoryApi } from '../api/inventory'
 import { recordsApi } from '../api/records'
 import DataTable from '../components/DataTable.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
-import { formatDateTime } from '../utils/format'
+import {
+  batchStatusText,
+  batchStatusVariant,
+  daysToExpiryText,
+  formatDate,
+  formatDateTime
+} from '../utils/format'
 
 const records = ref([])
 const ingredients = ref([])
+const batches = ref([])
 const error = ref('')
 const form = reactive({
   ingredientId: null,
   recordType: 'in',
   quantity: 1,
+  batchNo: '',
+  expiryDate: '',
   operator: '系统管理员',
   source: '',
   note: ''
@@ -81,9 +124,18 @@ const columns = [
   { key: 'ingredientName', label: '原料' },
   { key: 'recordType', label: '类型' },
   { key: 'quantity', label: '数量' },
+  { key: 'batchNo', label: '批次号' },
+  { key: 'expiryDate', label: '保质期' },
   { key: 'operator', label: '经办人' },
   { key: 'source', label: '来源/用途' },
   { key: 'createdAt', label: '时间' }
+]
+const batchColumns = [
+  { key: 'batchNo', label: '批次号' },
+  { key: 'remaining', label: '剩余数量' },
+  { key: 'expiryDate', label: '保质期' },
+  { key: 'daysToExpiry', label: '距到期' },
+  { key: 'status', label: '状态' }
 ]
 
 async function loadRecords() {
@@ -96,18 +148,59 @@ async function loadOptions() {
   ingredients.value = res.data.ingredients
 }
 
+async function loadBatches(ingredientId) {
+  if (!ingredientId) {
+    batches.value = []
+    return
+  }
+  const res = await inventoryApi.listIngredientBatches(ingredientId)
+  batches.value = res.data
+}
+
+function onIngredientChange() {
+  loadBatches(form.ingredientId)
+}
+
+watch(
+  () => form.recordType,
+  () => {
+    if (form.recordType === 'out') {
+      loadBatches(form.ingredientId)
+    } else {
+      batches.value = []
+    }
+  }
+)
+
 async function submitRecord() {
   error.value = ''
   try {
-    await recordsApi.create({ ...form })
+    const payload = { ...form }
+    if (form.recordType === 'in') {
+      if (!payload.batchNo) {
+        error.value = '请填写批次号'
+        return
+      }
+      if (!payload.expiryDate) {
+        error.value = '请选择保质期'
+        return
+      }
+    } else {
+      delete payload.batchNo
+      delete payload.expiryDate
+    }
+    await recordsApi.create(payload)
     Object.assign(form, {
       ingredientId: null,
       recordType: 'in',
       quantity: 1,
+      batchNo: '',
+      expiryDate: '',
       operator: '系统管理员',
       source: '',
       note: ''
     })
+    batches.value = []
     await Promise.all([loadRecords(), loadOptions()])
   } catch (err) {
     error.value = err.response?.data?.message || '登记失败'
@@ -118,3 +211,14 @@ onMounted(async () => {
   await Promise.all([loadRecords(), loadOptions()])
 })
 </script>
+
+<style scoped>
+.hint {
+  color: #6b786f;
+  font-size: 13px;
+  margin: 0 0 12px;
+}
+.muted {
+  color: #a0aba4;
+}
+</style>

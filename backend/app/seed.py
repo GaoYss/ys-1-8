@@ -1,7 +1,14 @@
-from datetime import date
+from datetime import date, timedelta
 
 from .extensions import db
-from .models import Ingredient, PurchaseOrder, PurchaseOrderItem, StockRecord, Supplier
+from .models import (
+    Ingredient,
+    IngredientBatch,
+    PurchaseOrder,
+    PurchaseOrderItem,
+    StockRecord,
+    Supplier,
+)
 
 
 def seed_data():
@@ -63,7 +70,7 @@ def seed_data():
             name="黑糖珍珠",
             category="小料",
             unit="kg",
-            stock=9,
+            stock=3,
             warning_threshold=15,
             supplier_id=suppliers[1].id,
         ),
@@ -77,6 +84,76 @@ def seed_data():
         ),
     ]
     db.session.add_all(ingredients)
+    db.session.flush()
+
+    today = date.today()
+
+    batches = [
+        IngredientBatch(
+            ingredient_id=ingredients[0].id,
+            batch_no="ASM-20260510-01",
+            quantity=15,
+            remaining=15,
+            expiry_date=today + timedelta(days=45),
+        ),
+        IngredientBatch(
+            ingredient_id=ingredients[0].id,
+            batch_no="ASM-20260601-02",
+            quantity=13,
+            remaining=13,
+            expiry_date=today + timedelta(days=15),
+        ),
+        IngredientBatch(
+            ingredient_id=ingredients[1].id,
+            batch_no="JAS-20260420-01",
+            quantity=8,
+            remaining=8,
+            expiry_date=today + timedelta(days=20),
+        ),
+        IngredientBatch(
+            ingredient_id=ingredients[1].id,
+            batch_no="JAS-20260315-02",
+            quantity=4,
+            remaining=4,
+            expiry_date=today - timedelta(days=5),
+        ),
+        IngredientBatch(
+            ingredient_id=ingredients[2].id,
+            batch_no="MILK-20260615-01",
+            quantity=25,
+            remaining=25,
+            expiry_date=today + timedelta(days=5),
+        ),
+        IngredientBatch(
+            ingredient_id=ingredients[2].id,
+            batch_no="MILK-20260610-02",
+            quantity=40,
+            remaining=40,
+            expiry_date=today + timedelta(days=90),
+        ),
+        IngredientBatch(
+            ingredient_id=ingredients[3].id,
+            batch_no="PEARL-20260601-01",
+            quantity=9,
+            remaining=3,
+            expiry_date=today + timedelta(days=180),
+        ),
+        IngredientBatch(
+            ingredient_id=ingredients[4].id,
+            batch_no="MANGO-20260501-01",
+            quantity=20,
+            remaining=20,
+            expiry_date=today + timedelta(days=60),
+        ),
+        IngredientBatch(
+            ingredient_id=ingredients[4].id,
+            batch_no="MANGO-20260301-02",
+            quantity=14,
+            remaining=14,
+            expiry_date=today + timedelta(days=10),
+        ),
+    ]
+    db.session.add_all(batches)
     db.session.flush()
 
     order = PurchaseOrder(
@@ -104,14 +181,16 @@ def seed_data():
         [
             StockRecord(
                 ingredient_id=ingredients[2].id,
+                batch_id=batches[4].id,
                 record_type="in",
-                quantity=40,
+                quantity=25,
                 operator="王店长",
                 source="采购入库",
                 note="每日乳品补货",
             ),
             StockRecord(
                 ingredient_id=ingredients[3].id,
+                batch_id=batches[6].id,
                 record_type="out",
                 quantity=6,
                 operator="李班长",

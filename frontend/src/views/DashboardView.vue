@@ -12,6 +12,14 @@
         <strong>{{ summary.warningCount }}</strong>
       </article>
       <article class="metric">
+        <span>临期批次</span>
+        <strong class="warning-text">{{ summary.expiringBatchCount || 0 }}</strong>
+      </article>
+      <article class="metric">
+        <span>过期批次</span>
+        <strong class="danger-text">{{ summary.expiredBatchCount || 0 }}</strong>
+      </article>
+      <article class="metric">
         <span>供应商</span>
         <strong>{{ suppliers.length }}</strong>
       </article>
@@ -43,6 +51,37 @@
         </DataTable>
       </section>
     </div>
+
+    <div class="content-grid" style="margin-top: 18px">
+      <section class="panel">
+        <h2>临期批次（30天内）</h2>
+        <DataTable :columns="expiringBatchColumns" :rows="expiringBatches">
+          <template #remaining="{ row }">{{ row.remaining }} {{ row.unit }}</template>
+          <template #expiryDate="{ row }">{{ formatDate(row.expiryDate) }}</template>
+          <template #daysToExpiry="{ row }">{{ daysToExpiryText(row.daysToExpiry) }}</template>
+          <template #status="{ row }">
+            <StatusBadge
+              :label="batchStatusText(row.status)"
+              :variant="batchStatusVariant(row.status)"
+            />
+          </template>
+        </DataTable>
+      </section>
+      <section class="panel">
+        <h2>已过期批次</h2>
+        <DataTable :columns="expiredBatchColumns" :rows="expiredBatches">
+          <template #remaining="{ row }">{{ row.remaining }} {{ row.unit }}</template>
+          <template #expiryDate="{ row }">{{ formatDate(row.expiryDate) }}</template>
+          <template #daysToExpiry="{ row }">{{ daysToExpiryText(row.daysToExpiry) }}</template>
+          <template #status="{ row }">
+            <StatusBadge
+              :label="batchStatusText(row.status)"
+              :variant="batchStatusVariant(row.status)"
+            />
+          </template>
+        </DataTable>
+      </section>
+    </div>
   </section>
 </template>
 
@@ -55,14 +94,30 @@ import { suppliersApi } from '../api/suppliers'
 import DataTable from '../components/DataTable.vue'
 import PageHeader from '../components/PageHeader.vue'
 import StatusBadge from '../components/StatusBadge.vue'
-import { statusText } from '../utils/format'
+import {
+  batchStatusText,
+  batchStatusVariant,
+  daysToExpiryText,
+  formatDate,
+  statusText
+} from '../utils/format'
 
-const summary = ref({ ingredientCount: 0, warningCount: 0, totalStock: 0 })
+const summary = ref({
+  ingredientCount: 0,
+  warningCount: 0,
+  totalStock: 0,
+  expiringBatchCount: 0,
+  expiredBatchCount: 0
+})
 const inventory = ref([])
 const orders = ref([])
 const suppliers = ref([])
+const allBatches = ref([])
 
 const warningItems = computed(() => inventory.value.filter((item) => item.warning))
+const expiringBatches = computed(() => allBatches.value.filter((b) => b.status === 'expiring'))
+const expiredBatches = computed(() => allBatches.value.filter((b) => b.status === 'expired'))
+
 const warningColumns = [
   { key: 'name', label: '原料' },
   { key: 'stock', label: '当前库存' },
@@ -74,17 +129,44 @@ const orderColumns = [
   { key: 'status', label: '状态' },
   { key: 'totalAmount', label: '金额' }
 ]
+const expiringBatchColumns = [
+  { key: 'ingredientName', label: '原料' },
+  { key: 'batchNo', label: '批次号' },
+  { key: 'remaining', label: '剩余' },
+  { key: 'expiryDate', label: '保质期' },
+  { key: 'daysToExpiry', label: '距到期' },
+  { key: 'status', label: '状态' }
+]
+const expiredBatchColumns = [
+  { key: 'ingredientName', label: '原料' },
+  { key: 'batchNo', label: '批次号' },
+  { key: 'remaining', label: '剩余' },
+  { key: 'expiryDate', label: '保质期' },
+  { key: 'daysToExpiry', label: '过期天数' },
+  { key: 'status', label: '状态' }
+]
 
 onMounted(async () => {
-  const [summaryRes, inventoryRes, ordersRes, suppliersRes] = await Promise.all([
+  const [summaryRes, inventoryRes, ordersRes, suppliersRes, batchesRes] = await Promise.all([
     inventoryApi.summary(),
     inventoryApi.list(),
     ordersApi.list(),
-    suppliersApi.list()
+    suppliersApi.list(),
+    inventoryApi.listBatches()
   ])
   summary.value = summaryRes.data
   inventory.value = inventoryRes.data
   orders.value = ordersRes.data
   suppliers.value = suppliersRes.data
+  allBatches.value = batchesRes.data
 })
 </script>
+
+<style scoped>
+.warning-text {
+  color: #b36b00;
+}
+.danger-text {
+  color: #a72f25;
+}
+</style>

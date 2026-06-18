@@ -8,6 +8,7 @@ class StockRecord(db.Model):
 
     id = db.Column(db.Integer, primary_key=True)
     ingredient_id = db.Column(db.Integer, db.ForeignKey("ingredients.id"), nullable=False)
+    batch_id = db.Column(db.Integer, db.ForeignKey("ingredient_batches.id"), nullable=True)
     record_type = db.Column(db.String(10), nullable=False)
     quantity = db.Column(db.Float, nullable=False)
     operator = db.Column(db.String(40), nullable=False)
@@ -16,6 +17,7 @@ class StockRecord(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
     ingredient = db.relationship("Ingredient")
+    batch = db.relationship("IngredientBatch")
 
     def to_dict(self):
         return {
@@ -23,6 +25,9 @@ class StockRecord(db.Model):
             "ingredientId": self.ingredient_id,
             "ingredientName": self.ingredient.name if self.ingredient else None,
             "unit": self.ingredient.unit if self.ingredient else None,
+            "batchId": self.batch_id,
+            "batchNo": self.batch.batch_no if self.batch else None,
+            "expiryDate": self.batch.expiry_date.isoformat() if self.batch and self.batch.expiry_date else None,
             "recordType": self.record_type,
             "quantity": self.quantity,
             "operator": self.operator,
