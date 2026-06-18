@@ -1,9 +1,67 @@
+from datetime import date, timedelta
+
 from flask import Blueprint, jsonify, request
 
 from ..extensions import db
 from ..models import Ingredient, IngredientBatch, Supplier
 
 inventory_bp = Blueprint("inventory", __name__)
+
+
+def _generate_initial_batch_no(ingredient_id):
+    today_str = date.today().strftime("%Y%m%d")
+    return f"INIT-{ingredient_id}-{today_str}"
+
+
+def _create_initial_batch(ingredient, quantity, expiry_days=365):
+    if quantity <= 0:
+        return None
+    expiry = date.today() + timedelta(days=expiry_days)
+    batch_no = _generate_initial_batch_no(ingredient.id)
+    suffix = 0
+    while IngredientBatch.query.filter_by(
+        ingredient_id=ingredient.id, batch_no=batch_no
+    ).first():
+        suffix += 1
+        batch_no = f"{_generate_initial_batch_no(ingredient.id)}-{suffix}"
+    batch = IngredientBatch(
+        ingredient_id=ingredient.id,
+        batch_no=batch_no,
+        quantity=quantity,
+        remaining=quantity,
+        expiry_date=expiry,
+    )
+    db.session.add(batch)
+    return batch
+
+
+def _ensure_batch_consistency(ingredient):
+    batches_total = sum(
+        b.remaining for b in IngredientBatch.query.filter_by(ingredient_id=ingredient.id).all()
+    )
+    if abs(ingredient.stock - batches_total) > 0.001:
+        if batches_total > 0:
+            ingredient.stock = batches_total
+        else:
+            _create_initial_batch(ingredient, ingredient.stock)
+            db.session.flush()
+
+
+def fix_missing_batches_for_existing_ingredients():
+    ingredients = Ingredient.query.all()
+    fixed = 0
+    for ing in ingredients:
+        batches = IngredientBatch.query.filter_by(ingredient_id=ing.id).all()
+        batches_total = sum(b.remaining for b in batches)
+        if ing.stock > 0 and batches_total <= 0:
+            _create_initial_batch(ing, ing.stock)
+            fixed += 1
+        elif abs(ing.stock - batches_total) > 0.001 and batches_total > 0:
+            ing.stock = batches_total
+            fixed += 1
+    if fixed > 0:
+        db.session.commit()
+    return fixed
 
 
 @inventory_bp.get("")
@@ -42,22 +100,53 @@ def inventory_summary():
 @inventory_bp.post("")
 def create_ingredient():
     data = request.get_json() or {}
+    initial_stock = float(data.get("stock", 0))
     ingredient = Ingredient(
         name=data["name"],
         category=data["category"],
         unit=data["unit"],
-        stock=float(data.get("stock", 0)),
+        stock=initial_stock,
         warning_threshold=float(data.get("warningThreshold", 0)),
         supplier_id=data.get("supplierId"),
     )
     db.session.add(ingredient)
+    db.session.flush()
+
+    if initial_stock > 0:
+        expiry_date_str = data.get("expiryDate")
+        if expiry_date_str:
+            try:
+                expiry_date = date.fromisoformat(expiry_date_str)
+            except (ValueError, TypeError):
+                expiry_date = date.today() + timedelta(days=365)
+        else:
+            expiry_date = date.today() + timedelta(days=365)
+        batch_no = data.get("batchNo") or _generate_initial_batch_no(ingredient.id)
+        suffix = 0
+        final_batch_no = batch_no
+        while IngredientBatch.query.filter_by(
+            ingredient_id=ingredient.id, batch_no=final_batch_no
+        ).first():
+            suffix += 1
+            final_batch_no = f"{batch_no}-{suffix}"
+        batch = IngredientBatch(
+            ingredient_id=ingredient.id,
+            batch_no=final_batch_no,
+            quantity=initial_stock,
+            remaining=initial_stock,
+            expiry_date=expiry_date,
+        )
+        db.session.add(batch)
+
     db.session.commit()
-    return ingredient.to_dict(), 201
+    return ingredient.to_dict(include_batches=True), 201
 
 
 @inventory_bp.get("/<int:ingredient_id>")
 def get_ingredient(ingredient_id):
     ingredient = Ingredient.query.get_or_404(ingredient_id)
+    _ensure_batch_consistency(ingredient)
+    db.session.commit()
     return ingredient.to_dict(include_batches=True)
 
 
@@ -69,14 +158,15 @@ def update_ingredient(ingredient_id):
     ingredient.name = data.get("name", ingredient.name)
     ingredient.category = data.get("category", ingredient.category)
     ingredient.unit = data.get("unit", ingredient.unit)
-    ingredient.stock = float(data.get("stock", ingredient.stock))
     ingredient.warning_threshold = float(
         data.get("warningThreshold", ingredient.warning_threshold)
     )
     ingredient.supplier_id = data.get("supplierId", ingredient.supplier_id)
 
+    _ensure_batch_consistency(ingredient)
+
     db.session.commit()
-    return ingredient.to_dict()
+    return ingredient.to_dict(include_batches=True)
 
 
 @inventory_bp.get("/options")
@@ -92,6 +182,8 @@ def ingredient_options():
 @inventory_bp.get("/<int:ingredient_id>/batches")
 def list_ingredient_batches(ingredient_id):
     ingredient = Ingredient.query.get_or_404(ingredient_id)
+    _ensure_batch_consistency(ingredient)
+    db.session.commit()
     status = request.args.get("status", "").strip()
     batches = sorted(
         [b for b in ingredient.batches if b.remaining > 0],

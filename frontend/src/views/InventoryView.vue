@@ -1,7 +1,8 @@
 <template>
   <section>
     <PageHeader eyebrow="Inventory" title="原料库存预警">
-      <button class="primary-btn" @click="submitIngredient">保存原料</button>
+      <button v-if="editId" class="secondary-btn" @click="resetForm">取消编辑</button>
+      <button class="primary-btn" @click="submitIngredient">{{ editId ? '更新原料' : '保存原料' }}</button>
     </PageHeader>
 
     <section class="form-panel">
@@ -18,13 +19,34 @@
           单位
           <input v-model="form.unit" placeholder="kg / L / 瓶" />
         </label>
-        <label>
-          当前库存
-          <input v-model.number="form.stock" type="number" min="0" />
-        </label>
+        <template v-if="!editId">
+          <label>
+            初始库存
+            <input v-model.number="form.stock" type="number" min="0" step="0.01" />
+          </label>
+          <label>
+            初始批次号（可选）
+            <input v-model="form.batchNo" placeholder="不填则自动生成" />
+          </label>
+          <label>
+            初始保质期（可选）
+            <input v-model="form.expiryDate" type="date" />
+          </label>
+        </template>
+        <template v-else>
+          <label>
+            当前库存（需通过出入库调整）
+            <input :value="`${form.stock} ${form.unit || ''}`" disabled class="readonly-input" />
+          </label>
+          <label>
+            批次总数
+            <input :value="currentBatchCount + ' 个批次（剩余合计 = 库存）'" disabled class="readonly-input" />
+          </label>
+          <div></div>
+        </template>
         <label>
           预警线
-          <input v-model.number="form.warningThreshold" type="number" min="0" />
+          <input v-model.number="form.warningThreshold" type="number" min="0" step="0.01" />
         </label>
         <label>
           默认供应商
@@ -36,6 +58,8 @@
           </select>
         </label>
       </div>
+      <p v-if="formMessage" class="success-text">{{ formMessage }}</p>
+      <p v-if="error" class="error-text">{{ error }}</p>
     </section>
 
     <div class="toolbar">
@@ -73,6 +97,9 @@
           />
           <span v-if="!row.expiringCount && !row.expiredCount" class="muted">-</span>
         </div>
+      </template>
+      <template #actions="{ row }">
+        <button class="link-btn" @click.stop="editIngredient(row)">编辑</button>
       </template>
     </DataTable>
 
@@ -116,13 +143,19 @@ const keyword = ref('')
 const onlyWarning = ref(false)
 const onlyBatchIssue = ref(false)
 const selectedIngredient = ref(null)
+const editId = ref(null)
+const currentBatchCount = ref(0)
+const error = ref('')
+const formMessage = ref('')
 const form = reactive({
   name: '',
   category: '',
   unit: '',
   stock: 0,
   warningThreshold: 0,
-  supplierId: null
+  supplierId: null,
+  batchNo: '',
+  expiryDate: ''
 })
 
 const columns = [
@@ -132,7 +165,8 @@ const columns = [
   { key: 'warningThreshold', label: '预警线' },
   { key: 'supplierName', label: '供应商' },
   { key: 'warning', label: '库存状态' },
-  { key: 'batchStatus', label: '批次状态' }
+  { key: 'batchStatus', label: '批次状态' },
+  { key: 'actions', label: '操作' }
 ]
 const batchColumns = [
   { key: 'batchNo', label: '批次号' },
@@ -149,6 +183,29 @@ const filteredInventory = computed(() => {
   }
   return list
 })
+
+function resetForm() {
+  editId.value = null
+  currentBatchCount.value = 0
+  Object.assign(form, {
+    name: '',
+    category: '',
+    unit: '',
+    stock: 0,
+    warningThreshold: 0,
+    supplierId: null,
+    batchNo: '',
+    expiryDate: ''
+  })
+  error.value = ''
+  formMessage.value = ''
+}
+
+function showFormMessage(msg) {
+  formMessage.value = msg
+  error.value = ''
+  setTimeout(() => { formMessage.value = '' }, 3000)
+}
 
 async function loadInventory() {
   const res = await inventoryApi.list({
@@ -177,17 +234,75 @@ async function selectIngredient(row) {
   }
 }
 
-async function submitIngredient() {
-  await inventoryApi.create({ ...form })
+async function editIngredient(row) {
+  const res = await inventoryApi.get(row.id)
+  const data = res.data
+  editId.value = data.id
+  currentBatchCount.value = (data.batches || []).length
   Object.assign(form, {
-    name: '',
-    category: '',
-    unit: '',
-    stock: 0,
-    warningThreshold: 0,
-    supplierId: null
+    name: data.name,
+    category: data.category,
+    unit: data.unit,
+    stock: data.stock,
+    warningThreshold: data.warningThreshold,
+    supplierId: data.supplierId,
+    batchNo: '',
+    expiryDate: ''
   })
-  await loadInventory()
+  error.value = ''
+  formMessage.value = ''
+  selectedIngredient.value = null
+  window.scrollTo({ top: 0, behavior: 'smooth' })
+}
+
+async function submitIngredient() {
+  error.value = ''
+  formMessage.value = ''
+  try {
+    if (!form.name || !String(form.name).trim()) {
+      error.value = '请填写原料名称'
+      return
+    }
+    if (!form.category || !String(form.category).trim()) {
+      error.value = '请填写分类'
+      return
+    }
+    if (!form.unit || !String(form.unit).trim()) {
+      error.value = '请填写单位'
+      return
+    }
+    if (editId.value) {
+      const payload = {
+        name: form.name,
+        category: form.category,
+        unit: form.unit,
+        warningThreshold: Number(form.warningThreshold) || 0,
+        supplierId: form.supplierId
+      }
+      const res = await inventoryApi.update(editId.value, payload)
+      const data = res.data
+      currentBatchCount.value = (data.batches || []).length
+      form.stock = data.stock
+      showFormMessage('原料信息更新成功，库存保持不变。出入库请在"入库出库记录"中操作。')
+    } else {
+      const payload = {
+        name: form.name,
+        category: form.category,
+        unit: form.unit,
+        stock: Number(form.stock) || 0,
+        warningThreshold: Number(form.warningThreshold) || 0,
+        supplierId: form.supplierId,
+        batchNo: form.batchNo || undefined,
+        expiryDate: form.expiryDate || undefined
+      }
+      await inventoryApi.create(payload)
+      showFormMessage('原料创建成功！初始库存已自动生成初始批次。')
+      resetForm()
+    }
+    await loadInventory()
+  } catch (err) {
+    error.value = err?.response?.data?.message || '保存失败，请检查输入'
+  }
 }
 
 onMounted(async () => {
@@ -217,5 +332,30 @@ onMounted(async () => {
 }
 tbody tr {
   cursor: pointer;
+}
+.link-btn {
+  background: none;
+  border: none;
+  color: #1d6b53;
+  cursor: pointer;
+  font-size: 14px;
+  padding: 4px 6px;
+  text-decoration: underline;
+}
+.link-btn:hover {
+  opacity: 0.8;
+}
+.readonly-input {
+  background: #f5f7f5;
+  color: #546358;
+}
+.success-text {
+  background: #e8f5e9;
+  border: 1px solid #a5d6a7;
+  border-radius: 6px;
+  color: #2e7d32;
+  font-size: 14px;
+  margin: 12px 0 0;
+  padding: 10px 14px;
 }
 </style>

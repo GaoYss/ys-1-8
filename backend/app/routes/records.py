@@ -8,6 +8,14 @@ from ..models import Ingredient, IngredientBatch, StockRecord
 records_bp = Blueprint("records", __name__)
 
 
+def _refresh_stock_from_batches(ingredient):
+    total = sum(
+        b.remaining for b in IngredientBatch.query.filter_by(ingredient_id=ingredient.id).all()
+    )
+    ingredient.stock = total
+    return total
+
+
 @records_bp.get("")
 def list_records():
     record_type = request.args.get("type", "").strip()
@@ -24,6 +32,9 @@ def create_record():
     ingredient = Ingredient.query.get_or_404(data["ingredientId"])
     quantity = float(data["quantity"])
     record_type = data["recordType"]
+
+    if quantity <= 0:
+        return {"message": "数量必须大于 0"}, 400
 
     if record_type == "in":
         return _handle_stock_in(ingredient, quantity, data)
@@ -73,13 +84,21 @@ def _handle_stock_in(ingredient, quantity, data):
         batch_id=batch.id,
         record_type="in",
         quantity=quantity,
-        operator=data.get("operator", "系统管理员"),
+        operator=data.get("operator") or "系统管理员",
         source=data.get("source"),
         note=data.get("note"),
     )
     db.session.add(record)
+
+    _refresh_stock_from_batches(ingredient)
+
     db.session.commit()
-    return record.to_dict(), 201
+    result = {
+        "records": [record.to_dict()],
+        "totalQuantity": quantity,
+        "ingredientStock": ingredient.stock,
+    }
+    return result, 201
 
 
 def _handle_stock_out(ingredient, quantity, data):
@@ -95,27 +114,27 @@ def _handle_stock_out(ingredient, quantity, data):
     valid_batches = [b for b in available_batches if not b.is_expired]
     valid_quantity = sum(b.remaining for b in valid_batches)
 
-    if valid_quantity < quantity:
+    if valid_quantity + 0.0001 < quantity:
         expired_quantity = sum(b.remaining for b in available_batches if b.is_expired)
         if expired_quantity > 0:
             return {
                 "message": f"可出库数量不足。可用{valid_quantity}{ingredient.unit}，另有{expired_quantity}{ingredient.unit}已过期无法出库"
             }, 400
-        return {"message": "库存不足，无法出库"}, 400
+        return {"message": f"库存不足，当前可出库{valid_quantity}{ingredient.unit}"}, 400
 
     remaining_to_deduct = quantity
     used_batches = []
     records = []
 
     for batch in valid_batches:
-        if remaining_to_deduct <= 0:
+        if remaining_to_deduct <= 0.0001:
             break
         deduct = min(batch.remaining, remaining_to_deduct)
-        batch.remaining -= deduct
-        remaining_to_deduct -= deduct
-        used_batches.append({"batch": batch, "deduct": deduct})
+        batch.remaining = round(batch.remaining - deduct, 4)
+        remaining_to_deduct = round(remaining_to_deduct - deduct, 4)
+        used_batches.append({"batch": batch, "deduct": round(deduct, 4)})
 
-    ingredient.stock -= quantity
+    _refresh_stock_from_batches(ingredient)
 
     for item in used_batches:
         record = StockRecord(
@@ -123,7 +142,7 @@ def _handle_stock_out(ingredient, quantity, data):
             batch_id=item["batch"].id,
             record_type="out",
             quantity=item["deduct"],
-            operator=data.get("operator", "系统管理员"),
+            operator=data.get("operator") or "系统管理员",
             source=data.get("source"),
             note=data.get("note"),
         )
@@ -132,6 +151,9 @@ def _handle_stock_out(ingredient, quantity, data):
 
     db.session.commit()
 
-    if len(records) == 1:
-        return records[0].to_dict(), 201
-    return jsonify([r.to_dict() for r in records]), 201
+    result = {
+        "records": [r.to_dict() for r in records],
+        "totalQuantity": round(quantity, 4),
+        "ingredientStock": ingredient.stock,
+    }
+    return result, 201

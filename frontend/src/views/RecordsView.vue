@@ -24,7 +24,7 @@
         </label>
         <label>
           数量
-          <input v-model.number="form.quantity" type="number" min="1" />
+          <input v-model.number="form.quantity" type="number" min="0.01" step="0.01" />
         </label>
         <template v-if="form.recordType === 'in'">
           <label>
@@ -53,7 +53,7 @@
 
     <section v-if="form.recordType === 'out' && form.ingredientId && batches.length" class="panel">
       <h2>可用批次（按临期优先自动扣减）</h2>
-      <p class="hint">系统将按照保质期从近到远（FEFO）自动扣减，已过期批次无法出库。</p>
+      <p class="hint">系统将按照保质期从近到远（FEFO）自动扣减，已过期批次将无法出库。</p>
       <DataTable :columns="batchColumns" :rows="batches">
         <template #remaining="{ row }">{{ row.remaining }} {{ row.unit }}</template>
         <template #expiryDate="{ row }">{{ formatDate(row.expiryDate) }}</template>
@@ -67,6 +67,7 @@
       </DataTable>
     </section>
 
+    <div v-if="successMessage" class="success-text">{{ successMessage }}</div>
     <p v-if="error" class="error-text">{{ error }}</p>
 
     <DataTable :columns="columns" :rows="records">
@@ -110,6 +111,7 @@ const records = ref([])
 const ingredients = ref([])
 const batches = ref([])
 const error = ref('')
+const successMessage = ref('')
 const form = reactive({
   ingredientId: null,
   recordType: 'in',
@@ -137,6 +139,12 @@ const batchColumns = [
   { key: 'daysToExpiry', label: '距到期' },
   { key: 'status', label: '状态' }
 ]
+
+function showSuccess(msg) {
+  successMessage.value = msg
+  error.value = ''
+  setTimeout(() => { successMessage.value = '' }, 3500)
+}
 
 async function loadRecords() {
   const res = await recordsApi.list()
@@ -174,10 +182,19 @@ watch(
 
 async function submitRecord() {
   error.value = ''
+  successMessage.value = ''
   try {
+    if (form.ingredientId == null) {
+      error.value = '请选择原料'
+      return
+    }
+    if (!form.quantity || form.quantity <= 0) {
+      error.value = '数量必须大于 0'
+      return
+    }
     const payload = { ...form }
     if (form.recordType === 'in') {
-      if (!payload.batchNo) {
+      if (!payload.batchNo || !String(payload.batchNo).trim()) {
         error.value = '请填写批次号'
         return
       }
@@ -189,7 +206,14 @@ async function submitRecord() {
       delete payload.batchNo
       delete payload.expiryDate
     }
-    await recordsApi.create(payload)
+    const res = await recordsApi.create(payload)
+    const result = res.data
+    const createdCount = (result.records || []).length
+    const totalQty = result.totalQuantity || payload.quantity
+    const unit = (result.records && result.records[0] && result.records[0].unit) || ''
+    const actionText = payload.recordType === 'in' ? '入库' : '出库'
+    const batchHint = createdCount > 1 ? `（拆分${createdCount}个批次）` : ''
+    showSuccess(`${actionText}成功：${totalQty}${unit} ${batchHint}`)
     Object.assign(form, {
       ingredientId: null,
       recordType: 'in',
@@ -203,7 +227,7 @@ async function submitRecord() {
     batches.value = []
     await Promise.all([loadRecords(), loadOptions()])
   } catch (err) {
-    error.value = err.response?.data?.message || '登记失败'
+    error.value = err?.response?.data?.message || '登记失败，请检查输入'
   }
 }
 
@@ -220,5 +244,14 @@ onMounted(async () => {
 }
 .muted {
   color: #a0aba4;
+}
+.success-text {
+  background: #e8f5e9;
+  border: 1px solid #a5d6a7;
+  border-radius: 6px;
+  color: #2e7d32;
+  font-size: 14px;
+  margin: 8px 0 14px;
+  padding: 10px 14px;
 }
 </style>
